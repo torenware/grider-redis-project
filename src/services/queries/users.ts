@@ -1,9 +1,24 @@
 import type { CreateUserAttrs } from '$services/types';
 import { genId } from '$services/utils';
 import { client } from '$services/redis';
-import { usersKey, usernamesUniqueKey } from '$services/keys';
+import { usersKey, usernamesUniqueKey, usernamesKey } from '$services/keys';
 
-export const getUserByUsername = async (username: string) => {};
+export const getUserByUsername = async (username: string) => {
+	// Look up the id-number
+	const idNum = await client.zScore(usernamesKey(), username);
+	const uneErr = new Error('User does not existo');
+	if (idNum === null) {
+		throw uneErr;
+	}
+
+	// stored as base10, convert to lc hex.
+	const id = idNum.toString(16);
+	const user = await client.hGetAll(usersKey(id));
+	if (Object.keys(user).length == 0) {
+		throw uneErr;
+	}
+	return deserialize(id, user);
+};
 
 export const getUserById = async (id: string) => {
 	const user = await client.hGetAll(usersKey(id));
@@ -21,6 +36,13 @@ export const createUser = async (attrs: CreateUserAttrs) => {
 
 	await client.hSet(usersKey(id), serialize(attrs));
 	await client.sAdd(usernamesUniqueKey(), attrs.username);
+
+	// Make usernames recoverable to user objects.
+	// We use a sorted set; you could also do this with a hash.
+	await client.zAdd(usernamesKey(), {
+		value: attrs.username,
+		score: parseInt(id, 16) // must be a number, and genId() returns a hex string.
+	});
 
 	return id;
 };
